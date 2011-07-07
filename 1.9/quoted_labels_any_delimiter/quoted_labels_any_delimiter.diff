@@ -1,0 +1,142 @@
+Index: parse.y
+===================================================================
+--- parse.y	(revision 32242)
++++ parse.y	(working copy)
+@@ -365,6 +365,8 @@
+ #define new_evstr(n) new_evstr_gen(parser,(n))
+ static NODE *evstr2dstr_gen(struct parser_params*,NODE*);
+ #define evstr2dstr(n) evstr2dstr_gen(parser,(n))
++static NODE *dstr_to_dsym_gen(struct parser_params*, NODE*);
++#define dstr_to_dsym(n) dstr_to_dsym_gen(parser,(n))
+ static NODE *splat_array(NODE*);
+ 
+ static NODE *call_bin_op_gen(struct parser_params*,NODE*,ID,NODE*);
+@@ -733,7 +735,7 @@
+ %token tAMPER		/* & */
+ %token tLAMBDA		/* -> */
+ %token tSYMBEG tSTRING_BEG tXSTRING_BEG tREGEXP_BEG tWORDS_BEG tQWORDS_BEG
+-%token tSTRING_DBEG tSTRING_DVAR tSTRING_END tLAMBEG
++%token tSTRING_DBEG tSTRING_DVAR tSTRING_END tLAMBEG tLABEL_END
+ 
+ /*
+  *	precedence table
+@@ -4203,26 +4205,7 @@
+ 		    {
+ 			lex_state = EXPR_END;
+ 		    /*%%%*/
+-			if (!($$ = $2)) {
+-			    $$ = NEW_LIT(ID2SYM(rb_intern("")));
+-			}
+-			else {
+-			    VALUE lit;
+-
+-			    switch (nd_type($$)) {
+-			      case NODE_DSTR:
+-				nd_set_type($$, NODE_DSYM);
+-				break;
+-			      case NODE_STR:
+-				lit = $$->nd_lit;
+-				$$->nd_lit = ID2SYM(rb_intern_str(lit));
+-				nd_set_type($$, NODE_LIT);
+-				break;
+-			      default:
+-				$$ = NEW_NODE(NODE_DSYM, Qnil, 1, NEW_LIST($$));
+-				break;
+-			    }
+-			}
++		        $$ = dstr_to_dsym($2);
+ 		    /*%
+ 			$$ = dispatch1(dyna_symbol, $2);
+ 		    %*/
+@@ -4765,7 +4748,14 @@
+ 			$$ = dispatch2(assoc_new, $1, $2);
+ 		    %*/
+ 		    }
+-		;
++		| tSTRING_BEG string_contents tLABEL_END arg_value
++		    {
++		    /*%%%*/
++			$$ = list_append(NEW_LIST(dstr_to_dsym($2)), $4);
++		    /*%
++			$$ = dispatch2(assoc_new, dispatch1(dyna_symbol, $2), $4);
++		    %*/
++		    };
+ 
+ operation	: tIDENTIFIER
+ 		| tCONSTANT
+@@ -6586,7 +6576,13 @@
+ 	}
+ 	else {
+ 	    token = parse_string(lex_strterm);
+-	    if (token == tSTRING_END || token == tREGEXP_END) {
++	    if (token == tSTRING_END) {
++	        if (peek(':') && (lex_state == EXPR_BEG || lex_state == EXPR_ENDARG || IS_ARG())) {
++                    nextc();
++                    token = tLABEL_END;
++                }
++            }
++            if (token == tSTRING_END || token == tREGEXP_END || token == tLABEL_END) {
+ 		rb_gc_force_recycle((VALUE)lex_strterm);
+ 		lex_strterm = 0;
+ 		lex_state = EXPR_END;
+@@ -8129,6 +8125,32 @@
+ }
+ 
+ static NODE *
++dstr_to_dsym_gen(struct parser_params *parser, NODE *node) {
++    NODE *key;
++    if (!(key = node)) {
++        key = NEW_LIT(ID2SYM(rb_intern("")));
++    }
++    else {
++        VALUE lit;
++    
++        switch (nd_type(key)) {
++          case NODE_DSTR:
++    	    nd_set_type(key, NODE_DSYM);
++    	    break;
++          case NODE_STR:
++    	    lit = key->nd_lit;
++    	    key->nd_lit = ID2SYM(rb_intern_str(lit));
++    	    nd_set_type(key, NODE_LIT);
++    	    break;
++          default:
++    	    key = NEW_NODE(NODE_DSYM, Qnil, 1, NEW_LIST(key));
++    	    break;
++        }
++    }
++    return key;
++}
++
++static NODE *
+ call_bin_op_gen(struct parser_params *parser, NODE *recv, ID id, NODE *arg1)
+ {
+     value_expr(recv);
+Index: ext/ripper/eventids2.c
+===================================================================
+--- ext/ripper/eventids2.c	(revision 32242)
++++ ext/ripper/eventids2.c	(working copy)
+@@ -42,6 +42,7 @@
+ static ID ripper_id_regexp_beg;
+ static ID ripper_id_regexp_end;
+ static ID ripper_id_label;
++static ID ripper_id_label_end;
+ static ID ripper_id_tlambda;
+ static ID ripper_id_tlambeg;
+ 
+@@ -95,6 +96,7 @@
+     ripper_id_regexp_beg = rb_intern_const("on_regexp_beg");
+     ripper_id_regexp_end = rb_intern_const("on_regexp_end");
+     ripper_id_label = rb_intern_const("on_label");
++    ripper_id_label_end = rb_intern_const("on_label_end");
+     ripper_id_tlambda = rb_intern_const("on_tlambda");
+     ripper_id_tlambeg = rb_intern_const("on_tlambeg");
+ 
+@@ -247,6 +249,7 @@
+     {tWORDS_BEG,	&ripper_id_words_beg},
+     {tXSTRING_BEG,	&ripper_id_backtick},
+     {tLABEL,		&ripper_id_label},
++    {tLABEL_END,	&ripper_id_label_end},
+     {tLAMBDA,		&ripper_id_tlambda},
+     {tLAMBEG,		&ripper_id_tlambeg},
+ 

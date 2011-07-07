@@ -1,0 +1,98 @@
+diff --git a/parse.y b/parse.y
+index c3db298..4915d8e 100644
+--- a/parse.y
++++ b/parse.y
+@@ -681,7 +681,7 @@ static void token_info_pop(struct parser_params*, const char *token);
+ 
+ %type <node> singleton strings string string1 xstring regexp
+ %type <node> string_contents xstring_contents regexp_contents string_content
+-%type <node> words qwords word_list qword_list word
++%type <node> words qwords qsymbols word_list qword_list sym_list word
+ %type <node> literal numeric dsym cpath
+ %type <node> top_compstmt top_stmts top_stmt
+ %type <node> bodystmt compstmt stmts stmt expr arg primary command command_call method_call
+@@ -732,7 +732,7 @@ static void token_info_pop(struct parser_params*, const char *token);
+ %token tSTAR		/* * */
+ %token tAMPER		/* & */
+ %token tLAMBDA		/* -> */
+-%token tSYMBEG tSTRING_BEG tXSTRING_BEG tREGEXP_BEG tWORDS_BEG tQWORDS_BEG
++%token tSYMBEG tSTRING_BEG tXSTRING_BEG tREGEXP_BEG tWORDS_BEG tQWORDS_BEG tQSYMBOLS_BEG
+ %token tSTRING_DBEG tSTRING_DVAR tSTRING_END tLAMBEG
+ 
+ /*
+@@ -2596,6 +2596,7 @@ primary		: literal
+ 		| regexp
+ 		| words
+ 		| qwords
++		| qsymbols
+ 		| var_ref
+ 		| backref
+ 		| tFID
+@@ -4021,6 +4022,25 @@ qwords		: tQWORDS_BEG ' ' tSTRING_END
+ 		    }
+ 		;
+ 
++qsymbols	: tQSYMBOLS_BEG ' ' tSTRING_END
++		    {
++		    /*%%%*/
++			$$ = NEW_ZARRAY();
++		    /*%
++			$$ = dispatch0(qwords_new);
++			$$ = dispatch1(array, $$);
++		    %*/
++		    }
++		| tQSYMBOLS_BEG sym_list tSTRING_END
++		    {
++		    /*%%%*/
++			$$ = $2;
++		    /*%
++			$$ = dispatch1(array, $2);
++		    %*/
++		    }
++		;
++
+ qword_list	: /* none */
+ 		    {
+ 		    /*%%%*/
+@@ -4039,6 +4059,28 @@ qword_list	: /* none */
+ 		    }
+ 		;
+ 
++sym_list	: /* none */
++		    {
++		    /*%%%*/
++			$$ = 0;
++		    /*%
++			$$ = dispatch0(qwords_new);
++		    %*/
++		    }
++		| sym_list tSTRING_CONTENT ' '
++		    {
++		    /*%%%*/
++			VALUE lit;
++                        lit = $2->nd_lit;
++                        $2->nd_lit = ID2SYM(rb_intern_str(lit));
++                        nd_set_type($2, NODE_LIT);
++			$$ = list_append($1, $2);
++		    /*%
++			$$ = dispatch2(qwords_add, $1, $2);
++		    %*/
++		    }
++		;
++
+ string_contents : /* none */
+ 		    {
+ 		    /*%%%*/
+@@ -7553,6 +7595,12 @@ parser_yylex(struct parser_params *parser)
+ 		pushback(c);
+ 		return tQWORDS_BEG;
+ 
++	      case 'S':
++		lex_strterm = NEW_STRTERM(str_sword, term, paren);
++		do {c = nextc();} while (ISSPACE(c));
++		pushback(c);
++		return tQSYMBOLS_BEG;
++
+ 	      case 'x':
+ 		lex_strterm = NEW_STRTERM(str_xquote, term, paren);
+ 		return tXSTRING_BEG;
