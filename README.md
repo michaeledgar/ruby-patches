@@ -21,8 +21,11 @@ Want to try out [Refinements](http://timelessrepo.com/refinements-in-ruby), a fe
 
 Want an easy way to use these patches? Use [rvm](http://rvm.beginrescueend.com/):
 
-    rvm install 1.9.2-head --patch example/foo.diff
-    rvm install 1.9.2-head --patch example/foo.diff,example/bar.diff
+    rvm install 1.9.2-head --patch example/foo.diff -n fooruby
+    rvm install 1.9.2-head --patch example/foo.diff,example/bar.diff -n sillyruby
+
+Be sure to patch the correct interpreter for a given patch! A tiny shell wrapper is in the works,
+too, just to make some mistakes harder to make.
 
 ## The Point of ruby-patches
 
