@@ -1,0 +1,28 @@
+Index: parse.y
+===================================================================
+--- parse.y	(revision 32466)
++++ parse.y	(working copy)
+@@ -746,6 +746,7 @@
+ %left  keyword_or keyword_and
+ %right keyword_not
+ %nonassoc keyword_defined
++%nonassoc keyword_in
+ %right '=' tOP_ASGN
+ %left modifier_rescue
+ %right '?' ':'
+@@ -2289,6 +2290,15 @@
+ 			$$ = dispatch3(binary, $1, ripper_intern("!~"), $3);
+ 		    %*/
+ 		    }
++		| arg keyword_in arg
++		    {
++		    /*%%%*/
++			$$ = call_bin_op($3, rb_intern("include?"), $1);
++		    /*%
++			$$ = dispatch3(call, $3, ripper_intern("in"), ripper_intern("include?"));
++			$$ = method_optarg($$, $1);
++		    %*/
++		    }
+ 		| '!' arg
+ 		    {
+ 		    /*%%%*/
