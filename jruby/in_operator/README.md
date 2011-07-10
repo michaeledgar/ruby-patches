@@ -1,11 +1,11 @@
 # `in` Operator
 
 **Author:** Michael Edgar  
-**Date:** 7/9/2011
+**Date:** 7/10/2011
 
 ## What it does
 
-This patch adds a simple syntax change to Ruby 1.9's grammar: the `in` operator, which
+This patch adds a simple syntax change to JRuby's grammar: the `in` operator, which
 acts much like Python's. The following code is equivalent:
 
 ```
