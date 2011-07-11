@@ -1,7 +1,6 @@
 # `in` Operator
 
 **Author:** Michael Edgar  
-**Date:** 7/10/2011
 
 ## What it does
 

@@ -1,7 +1,6 @@
 # Symbol List Syntax
 
 **Author:** Michael Edgar, adapted from Aaron Patterson's patch for CRuby 
-**Date:** 7/6/2011
 
 ## What it does
 

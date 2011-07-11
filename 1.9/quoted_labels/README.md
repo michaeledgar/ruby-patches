@@ -1,7 +1,6 @@
 # Quoted-Label Syntax
 
 **Author:** Michael Edgar  
-**Date:** 7/3/2011
 
 ## What it does
 

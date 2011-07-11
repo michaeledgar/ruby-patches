@@ -1,7 +1,6 @@
 # Symbol List Syntax
 
 **Author:** Aaron Patterson  
-**Date:** 7/6/2011
 
 ## What it does
 

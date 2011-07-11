@@ -1,7 +1,6 @@
 # Refinements
 
 **Author:** Shugo Maeda  
-**Date:** Sometime in 2010
 
 ## What it does
 
