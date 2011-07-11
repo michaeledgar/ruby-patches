@@ -1,11 +1,15 @@
 # Optimized Require
 
-**Author:** Xavier Shay  
-**Date:** 7/3/2011
+This directory contains two patches that optimize the ruby require.
 
-## What it does
+More information: http://www.rubyinside.com/ruby-1-9-3-faster-loading-times-require-4927.html
 
-This patch speeds up Ruby's require performance by rewriting the C implementation. More
-information about how the patch works can be found at Xavier Shay's website:
+## Patch by the Ruby Core
 
-http://rhnh.net/2011/05/28/speeding-up-rails-startup-time
+**Author:** Masaya Tarui
+
+## Patch by Xavier Shay
+
+**Author:** Xavier Shay
+
+More information: http://rhnh.net/2011/05/28/speeding-up-rails-startup-time
