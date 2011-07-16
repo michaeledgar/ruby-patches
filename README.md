@@ -45,7 +45,6 @@ Want an easy way to use these patches? Use [rvm](http://rvm.beginrescueend.com/)
 Be sure to patch the correct interpreter for a given patch!
 A tiny shell wrapper is in the works, too, just to make some mistakes harder to make.
 
-
 Contributing
 ------------
 
@@ -61,6 +60,17 @@ Here's what you do:
 While I don't have any patches for some implementations as yet, the directory structure
 is already set up. Which might be disappointing at first glance.
 
+Past Contributors
+-----------------
+
+Special thanks to everyone on this list for making all these patches possible!
+
+* Michael Edgar
+* Aaron Patterson
+* Xavier Shay
+* Shugo Maeda
+* Masaya Tarui
+* Kurtis Rainbolt-Greene
 
 Licensing
 ---------
