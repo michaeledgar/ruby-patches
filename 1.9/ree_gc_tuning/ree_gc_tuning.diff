@@ -1,0 +1,110 @@
+diff --git a/gc.c b/gc.c
+--- a/gc.c
++++ b/gc.c
+@@ -77,6 +77,41 @@ void *alloca ();
+ #ifndef GC_MALLOC_LIMIT
+ #define GC_MALLOC_LIMIT 8000000
+ #endif
++#define HEAP_MIN_SLOTS 10000
++#define FREE_MIN  4096
++
++static unsigned int initial_malloc_limit   = GC_MALLOC_LIMIT;
++static unsigned int initial_heap_min_slots = HEAP_MIN_SLOTS;
++static unsigned int initial_free_min       = FREE_MIN;
++
++static void set_gc_parameters()
++{
++   char *malloc_limit_ptr, *heap_min_slots_ptr, *free_min_ptr;
++
++   malloc_limit_ptr = getenv("RUBY_GC_MALLOC_LIMIT");
++   if ( malloc_limit_ptr != NULL ) {
++       int malloc_limit_i = atoi(malloc_limit_ptr);
++       if ( malloc_limit_i > 0 ) {
++	   initial_malloc_limit = malloc_limit_i;
++       }
++   }
++
++   heap_min_slots_ptr = getenv("RUBY_HEAP_MIN_SLOTS");
++   if ( heap_min_slots_ptr != NULL ) {
++       int heap_min_slots_i = atoi(heap_min_slots_ptr);
++       if ( heap_min_slots_i > 0 ) {
++	   initial_heap_min_slots = heap_min_slots_i;
++       }
++   }
++
++   free_min_ptr = getenv("RUBY_FREE_MIN");
++   if ( free_min_ptr != NULL ) {
++       int free_min_i = atoi(free_min_ptr);
++       if ( free_min_i > 0 ) {
++	   initial_free_min = free_min_i;
++       }
++   }
++}
+ 
+ #define nomem_error GET_VM()->special_exceptions[ruby_error_nomemory]
+ 
+@@ -283,9 +318,6 @@ struct heaps_slot {
+     int finalize_flag;
+ };
+ 
+-#define HEAP_MIN_SLOTS 10000
+-#define FREE_MIN  4096
+-
+ struct gc_list {
+     VALUE *varptr;
+     struct gc_list *next;
+@@ -341,7 +373,7 @@ typedef struct rb_objspace {
+ static int ruby_initial_gc_stress = 0;
+ int *ruby_initial_gc_stress_ptr = &ruby_initial_gc_stress;
+ #else
+-static rb_objspace_t rb_objspace = {{GC_MALLOC_LIMIT}, {HEAP_MIN_SLOTS}};
++static rb_objspace_t rb_objspace = {{initial_malloc_limit}, {initial_heap_min_slots}};
+ int *ruby_initial_gc_stress_ptr = &rb_objspace.gc_stress;
+ #endif
+ #define malloc_limit		objspace->malloc_params.limit
+@@ -375,7 +407,7 @@ rb_objspace_alloc(void)
+ {
+     rb_objspace_t *objspace = malloc(sizeof(rb_objspace_t));
+     memset(objspace, 0, sizeof(*objspace));
+-    malloc_limit = GC_MALLOC_LIMIT;
++    malloc_limit = initial_malloc_limit;
+     ruby_gc_stress = ruby_initial_gc_stress;
+ 
+     return objspace;
+@@ -958,7 +990,7 @@ init_heap(rb_objspace_t *objspace)
+ {
+     size_t add, i;
+ 
+-    add = HEAP_MIN_SLOTS / HEAP_OBJ_LIMIT;
++    add = initial_heap_min_slots / HEAP_OBJ_LIMIT;
+ 
+     if (!add) {
+         add = 1;
+@@ -1862,9 +1894,9 @@ gc_sweep(rb_objspace_t *objspace)
+     do_heap_free = (size_t)((heaps_used * HEAP_OBJ_LIMIT) * 0.65);
+     free_min = (size_t)((heaps_used * HEAP_OBJ_LIMIT)  * 0.2);
+ 
+-    if (free_min < FREE_MIN) {
++    if (free_min < initial_free_min) {
+ 	do_heap_free = heaps_used * HEAP_OBJ_LIMIT;
+-        free_min = FREE_MIN;
++        free_min = initial_free_min;
+     }
+ 
+     freelist = 0;
+@@ -1926,7 +1958,7 @@ gc_sweep(rb_objspace_t *objspace)
+     GC_PROF_SET_MALLOC_INFO;
+     if (malloc_increase > malloc_limit) {
+ 	malloc_limit += (size_t)((malloc_increase - malloc_limit) * (double)live / (live + freed));
+-	if (malloc_limit < GC_MALLOC_LIMIT) malloc_limit = GC_MALLOC_LIMIT;
++	if (malloc_limit < initial_malloc_limit) malloc_limit = initial_malloc_limit;
+     }
+     malloc_increase = 0;
+     if (freed < free_min) {
+@@ -2298,6 +2330,7 @@ Init_stack(volatile VALUE *addr)
+ void
+ Init_heap(void)
+ {
++    set_gc_parameters();
+     init_heap(&rb_objspace);
+ }
