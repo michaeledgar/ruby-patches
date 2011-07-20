@@ -71,6 +71,9 @@ Special thanks to everyone on this list for making all these patches possible!
 * Shugo Maeda
 * Masaya Tarui
 * Kurtis Rainbolt-Greene
+* REE's Developers (for GC Tuning)
+* skaes
+* funny-falcon
 
 Licensing
 ---------
