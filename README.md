@@ -74,6 +74,7 @@ Special thanks to everyone on this list for making all these patches possible!
 * REE's Developers (for GC Tuning)
 * skaes
 * funny-falcon
+* enebo
 
 Licensing
 ---------

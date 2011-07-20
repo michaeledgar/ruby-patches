@@ -1,6 +1,6 @@
 # en(n+)d keyword
 
-**Author:** enebo @ github
+**Author:** ko1? (Source: http://www.atdot.net/sp/raw/kn9iol)
 
 ## What it does
 
