@@ -1,0 +1,39 @@
+Index: parse.y
+===================================================================
+--- parse.y	(revision 32466)
++++ parse.y	(working copy)
+@@ -707,6 +707,7 @@
+ %*/
+ %token tUPLUS		/* unary+ */
+ %token tUMINUS		/* unary- */
++%token tUBS     /* \  */
+ %token tPOW		/* ** */
+ %token tCMP		/* <=> */
+ %token tEQ		/* == */
+@@ -1402,6 +1403,14 @@
+ 			$$ = method_add_block($$, $5);
+ 		    %*/
+ 		   }
++		| primary_value '\\' operation2
++            {
++            $$ = NEW_CALL($1, rb_intern("method"), NEW_LIST(NEW_LIT(ID2SYM($3))));
++            }
++        | tUBS operation2
++            {
++            $$ = NEW_FCALL(rb_intern("method"), NEW_LIST(NEW_LIT(ID2SYM($2))));
++            }
+ 		| keyword_super command_args
+ 		    {
+ 		    /*%%%*/
+@@ -7509,6 +7518,11 @@
+ 	    goto retry; /* skip \\n */
+ 	}
+ 	pushback(c);
++	if (lex_state == EXPR_BEG || lex_state == EXPR_MID || space_seen) {
++	  lex_state = EXPR_DOT;
++	  return tUBS;
++	}
++	lex_state = EXPR_DOT;
+ 	return '\\';
+ 
+       case '%':
