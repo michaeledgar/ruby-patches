@@ -1,0 +1,141 @@
+--- gc.c	13 Oct 2004 19:45:34 -0000	1.1.1.1
++++ gc.c	22 Oct 2004 22:30:36 -0000	1.1.1.1.8.2
+@@ -400,6 +400,13 @@
+     data->dmark = dmark;
+ 
+     return (VALUE)data;
++}
++
++void
++rb_object_inplace_replace(obj1, obj2)
++    void *obj1, *obj2;
++{
++    RUBY_CRITICAL(*((RVALUE*)obj1) = *((RVALUE*)obj2));
+ }
+ 
+ extern st_table *rb_class_tbl;
+--- object.c	13 Oct 2004 19:46:03 -0000	1.1.1.1
++++ object.c	31 Oct 2004 23:16:50 -0000	1.1.1.1.8.7
+@@ -3,7 +3,7 @@
+   object.c -
+ 
+   $Author: peterv $
+-  $Date: 2004/10/13 19:46:03 $
++  $Date: 2004/10/31 23:16:50 $
+   created at: Thu Jul 15 12:01:24 JST 1993
+ 
+   Copyright (C) 1993-2003 Yukihiro Matsumoto
+@@ -2383,6 +2383,94 @@
+ }
+ 
+ static VALUE
++rb_has_ancestor(c1, c2)
++    VALUE c1, c2;
++{
++    while (c1) {
++	if (c1 == c2)
++	    return Qtrue;
++	c1 = RCLASS(c1)->super;
++    }
++    return Qfalse;
++}
++
++static VALUE
++rb_replace_bang(obj, arg)
++     VALUE obj, arg;
++{
++    if (obj == arg)
++	return arg;
++    if (FIXNUM_P(obj) || SYMBOL_P(obj) || rb_special_const_p(obj))
++	rb_raise(rb_eTypeError, "can't have a Fixnum, Symbol, true, false or nil become");
++    if (FIXNUM_P(arg) || SYMBOL_P(arg) || rb_special_const_p(arg))
++	rb_raise(rb_eTypeError, "can't become a Fixnum, Symbol, true, false or nil");
++    if (FL_TEST(obj, FL_EXIVAR))
++      rb_raise(rb_eTypeError, "won't have an EXIVAR become");
++    if (FL_TEST(arg, FL_EXIVAR))
++      rb_raise(rb_eTypeError, "won't become an EXIVAR");
++    if (FL_TEST(obj, FL_FREEZE))
++      rb_raise(rb_eTypeError, "won't have a frozen object become");
++    switch (BUILTIN_TYPE(obj)) {
++    case T_CLASS:
++    case T_MODULE:
++	if (BUILTIN_TYPE(obj) != BUILTIN_TYPE(arg))
++	    rb_raise(rb_eArgError, "I will only have these by objects become of the same type");
++	if (rb_has_ancestor(arg, obj))
++	    rb_raise(rb_eArgError, "become would cause circular include/inheritance");
++	if (obj == rb_cObject || obj == rb_cClass || obj == rb_cFloat ||
++	    obj == rb_cString || obj == rb_cHash || obj == rb_cFile ||
++	    obj == rb_cIO || obj == rb_cData || obj == rb_cStruct ||
++	    obj == rb_cBignum || obj == rb_cFixnum || obj == rb_cArray ||
++	    obj == rb_cRegexp) {
++	    rb_raise(rb_eArgError, "I refuse to have builtin classes become something else");
++	}
++	break;
++
++    case T_FLOAT:
++    case T_STRING:
++    case T_REGEXP:
++    case T_ARRAY:
++    case T_HASH:
++    case T_STRUCT:
++    case T_BIGNUM:
++    case T_FILE:
++    case T_MATCH:
++        if (BUILTIN_TYPE(obj) != BUILTIN_TYPE(arg))
++	    rb_raise(rb_eArgError, "I refuse to have objects of builtin classes become");
++	break;
++	
++    case T_FIXNUM:
++    case T_TRUE:
++    case T_FALSE:
++    case T_SYMBOL:
++    case T_NIL:
++        /* Shouldn't happen */
++    case T_ICLASS:
++
++    case T_DATA:
++    case T_BLKTAG:
++    case T_UNDEF:
++    case T_VARMAP:
++    case T_SCOPE:
++    case T_NODE:
++    case T_NONE:
++	rb_raise(rb_eArgError, "I refuse to become");
++	break;
++
++    case T_OBJECT:
++	/* Always allow */
++	break;
++
++    default:
++	rb_bug("unknown type %d", BUILTIN_TYPE(obj));
++    }
++    rb_object_inplace_replace((void *)obj, (void *)arg);
++    if (BUILTIN_TYPE(obj) == T_CLASS || BUILTIN_TYPE(obj) == T_MODULE)
++	rb_clear_cache();
++    return arg;
++}
++
++static VALUE
+ boot_defclass(name, super)
+     char *name;
+     VALUE super;
+@@ -2497,6 +2585,8 @@
+     rb_define_private_method(rb_cModule, "method_removed", rb_obj_dummy, 1);
+     rb_define_private_method(rb_cModule, "method_undefined", rb_obj_dummy, 1);
+ 
++
++    rb_define_method(rb_cObject, "become", rb_replace_bang, 1);
+ 
+     rb_define_method(rb_mKernel, "nil?", rb_false, 0);
+     rb_define_method(rb_mKernel, "==", rb_obj_equal, 1);
+--- ruby.h	13 Oct 2004 19:47:00 -0000	1.1.1.1
++++ ruby.h	19 Oct 2004 22:32:11 -0000	1.1.1.1.8.1
+@@ -377,6 +377,7 @@
+ typedef void (*RUBY_DATA_FUNC) _((void*));
+ 
+ VALUE rb_data_object_alloc _((VALUE,void*,RUBY_DATA_FUNC,RUBY_DATA_FUNC));
++void rb_object_inplace_replace _((void *obj1, void *obj2));
+ 
+ #define Data_Wrap_Struct(klass,mark,free,sval)\
+     rb_data_object_alloc(klass,sval,(RUBY_DATA_FUNC)mark,(RUBY_DATA_FUNC)free)

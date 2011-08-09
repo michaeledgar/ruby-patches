@@ -1,0 +1,223 @@
+--- eval.c	13 Oct 2004 19:45:26 -0000	1.1.1.1
++++ eval.c	7 Dec 2004 21:01:41 -0000	1.1.1.1.18.4
+@@ -146,6 +146,9 @@
+ static VALUE rb_mod_define_method _((int, VALUE*, VALUE));
+ NORETURN(static void rb_raise_jump _((VALUE)));
+ static VALUE rb_make_exception _((int argc, VALUE *argv));
++static VALUE um_new _((VALUE klass, NODE *body, ID id));
++static VALUE m_new _((VALUE klass, VALUE recv, NODE *body, ID id));
++static ID check_method_id _((VALUE obj, VALUE *mod));
+ 
+ static int scope_vmode;
+ #define SCOPE_PUBLIC    0
+@@ -314,7 +317,7 @@
+ static ID added, singleton_added;
+ static ID __id__, __send__;
+ 
+-void
++NODE *
+ rb_add_method(klass, mid, node, noex)
+     VALUE klass;
+     ID mid;
+@@ -350,6 +353,7 @@
+ 	    rb_funcall(klass, added, 1, ID2SYM(mid));
+ 	}
+     }
++    return node;
+ }
+ 
+ void
+@@ -3716,12 +3720,12 @@
+ 	    }
+ 
+ 	    defn = copy_node_scope(node->nd_defn, ruby_cref);
+-	    rb_add_method(ruby_class, node->nd_mid, defn, noex);
++	    body = rb_add_method(ruby_class, node->nd_mid, defn, noex);
+ 	    if (scope_vmode == SCOPE_MODFUNC) {
+ 		rb_add_method(rb_singleton_class(ruby_class),
+ 			      node->nd_mid, defn, NOEX_PUBLIC);
+ 	    }
+-	    result = Qnil;
++	    result = um_new(ruby_class, body, node->nd_mid);
+ 	}
+ 	break;
+ 
+@@ -3752,9 +3756,9 @@
+ 		}
+ 	    }
+ 	    defn = copy_node_scope(node->nd_defn, ruby_cref);
+-	    rb_add_method(klass, node->nd_mid, defn,
++	    body = rb_add_method(klass, node->nd_mid, defn,
+ 			  NOEX_PUBLIC|(body?body->nd_noex&NOEX_UNDEF:0));
+-	    result = Qnil;
++	    result = m_new(klass, recv, body, node->nd_mid);
+ 	}
+ 	break;
+ 
+@@ -6878,10 +6882,16 @@
+     ID ex;
+ {
+     int i;
++    VALUE m;
++    ID id;
+ 
+     secure_visibility(self);
+     for (i=0; i<argc; i++) {
+-	rb_export_method(self, rb_to_id(argv[i]), ex);
++        VALUE mod = self;
++	m = argv[i];
++	id = check_method_id(m, &mod);
++	if (!id) id = rb_to_id(m);
++	rb_export_method(mod, id, ex);
+     }
+     rb_clear_cache_by_class(self);
+ }
+@@ -7100,22 +7110,28 @@
+ 
+     set_method_visibility(module, argc, argv, NOEX_PRIVATE);
+     for (i=0; i<argc; i++) {
+-	VALUE m = module;
+-
+-	id = rb_to_id(argv[i]);
+-	for (;;) {
+-	    body = search_method(m, id, &m);
+-	    if (body == 0) {
+-		body = search_method(rb_cObject, id, &m);
+-	    }
+-	    if (body == 0 || body->nd_body == 0) {
+-		rb_bug("undefined method `%s'; can't happen", rb_id2name(id));
+-	    }
+-	    if (nd_type(body->nd_body) != NODE_ZSUPER) {
+-		break;		/* normal case: need not to follow 'super' link */
++        VALUE mod = module;
++        if (!(id = check_method_id(argv[i], &mod))) {
++	    VALUE m = module;
++
++	    id = rb_to_id(argv[i]);
++	    for (;;) {
++		body = search_method(m, id, &m);
++		if (body == 0) {
++		    body = search_method(rb_cObject, id, &m);
++		}
++		if (body == 0 || body->nd_body == 0) {
++		    rb_bug("undefined method `%s'; can't happen", rb_id2name(id));
++		}
++		if (nd_type(body->nd_body) != NODE_ZSUPER) {
++		    break;		/* normal case: need not to follow 'super' link */
++		}
++		m = RCLASS(m)->super;
++		if (!m) break;
+ 	    }
+-	    m = RCLASS(m)->super;
+-	    if (!m) break;
++	}
++	else {
++	    body = search_method(module, id, &mod);
+ 	}
+ 	rb_add_method(rb_singleton_class(module), id, body->nd_body, NOEX_PUBLIC);
+     }
+@@ -8502,7 +8518,7 @@
+ 	rklass = RCLASS(rklass)->super;
+     }
+     if (TYPE(klass) == T_ICLASS) klass = RBASIC(klass)->klass;
+-    method = Data_Make_Struct(mklass, struct METHOD, bm_mark, free, data);
++    method = Data_Make_Struct(mklass, struct METHOD, bm_mark, -1, data);
+     data->klass = klass;
+     data->recv = obj;
+     data->id = id;
+@@ -8514,6 +8530,84 @@
+     return method;
+ }
+ 
++static VALUE
++um_new(klass, body, id)
++    VALUE klass;
++    ID id;
++    NODE *body;
++{
++    VALUE method;
++    struct METHOD *data;
++
++    method = Data_Make_Struct(rb_cUnboundMethod, struct METHOD, bm_mark, -1, data);
++    data->klass = klass;
++    data->recv = Qundef;
++    data->id = id;
++    data->body = body;
++    data->rklass = klass;
++    data->oid = id;
++    OBJ_INFECT(method, klass);
++
++    return method;
++}
++
++static VALUE
++m_new(klass, recv, body, id)
++    VALUE klass, recv;
++    ID id;
++    NODE *body;
++{
++    VALUE method;
++    struct METHOD *data;
++
++    method = Data_Make_Struct(rb_cMethod, struct METHOD, bm_mark, -1, data);
++    data->klass = klass;
++    data->recv = recv;
++    data->id = id;
++    data->body = body;
++    data->rklass = klass;
++    data->oid = id;
++    OBJ_INFECT(method, klass);
++
++    return method;
++}
++
++static ID
++check_method_id(obj, mod)
++    VALUE obj, *mod;
++{
++    struct METHOD *data;
++    VALUE klass;
++    ID id;
++    ID noex;
++    NODE *body;
++
++    if (TYPE(obj) != T_DATA || RDATA(obj)->dmark != bm_mark)
++	return 0;
++    data = (struct METHOD *)RDATA(obj)->data;
++    if (data->rklass != *mod) {
++        if (data->rklass != rb_singleton_class(*mod)) {
++	    rb_raise(rb_eTypeError, "%s mismatch - %s for %s",
++		     (TYPE(*mod) == T_CLASS ? "class" : "module"),
++		     RSTRING(rb_obj_as_string(data->rklass))->ptr, RSTRING(rb_obj_as_string(*mod))->ptr);
++	}
++	*mod = rb_singleton_class(*mod);
++    }
++    for (klass = *mod, id = data->oid;; klass = RCLASS(klass)->super) {
++	if ((body = rb_get_method_body(&klass, &id, &noex)) == 0) {
++	    rb_raise(rb_eTypeError, "method %s in %s disappeared",
++		     rb_id2name(data->oid), RSTRING(rb_obj_as_string(data->rklass))->ptr);
++	}
++
++	if (nd_type(body) != NODE_ZSUPER) break;
++    }
++
++    if (body != data->body) {
++	rb_raise(rb_eTypeError, "method %s in %s changed",
++		 rb_id2name(data->oid), RSTRING(rb_obj_as_string(data->rklass))->ptr);
++    }
++    return data->oid;
++}
+ 
+ /**********************************************************************
+  *
+--- node.h	13 Oct 2004 19:45:53 -0000	1.1.1.1
++++ node.h	6 Dec 2004 23:40:44 -0000	1.1.1.1.18.1
+@@ -349,7 +349,7 @@
+ NODE *rb_compile_string _((const char*, VALUE, int));
+ NODE *rb_compile_file _((const char*, VALUE, int));
+ 
+-void rb_add_method _((VALUE, ID, NODE *, int));
++NODE *rb_add_method _((VALUE, ID, NODE *, int));
+ NODE *rb_node_newnode _((enum node_type,VALUE,VALUE,VALUE));
+ 
+ NODE* rb_method_node _((VALUE klass, ID id));

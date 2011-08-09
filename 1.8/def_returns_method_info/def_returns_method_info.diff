@@ -1,0 +1,271 @@
+--- eval.c	13 Oct 2004 19:45:26 -0000	1.1.1.1
++++ eval.c	10 Dec 2004 18:22:20 -0000	1.1.1.1.20.1
+@@ -146,6 +146,8 @@
+ static VALUE rb_mod_define_method _((int, VALUE*, VALUE));
+ NORETURN(static void rb_raise_jump _((VALUE)));
+ static VALUE rb_make_exception _((int argc, VALUE *argv));
++static ID check_method_id _((VALUE obj, VALUE *mod, int allow_meta));
++static ID get_method_id _((VALUE obj, VALUE *mod, int allow_meta));
+ 
+ static int scope_vmode;
+ #define SCOPE_PUBLIC    0
+@@ -169,6 +171,8 @@
+ static VALUE safe_getter _((void));
+ static void safe_setter _((VALUE val));
+ 
++static VALUE S_MI;
++
+ void
+ rb_secure(level)
+     int level;
+@@ -514,7 +518,11 @@
+     int i;
+ 
+     for (i=0; i<argc; i++) {
+-	remove_method(mod, rb_to_id(argv[i]));
++        VALUE module, id;
++	
++	module = mod;
++	id = get_method_id(argv[i], &module, 1);
++	remove_method(module, id);
+     }
+     return mod;
+ }
+@@ -1998,7 +2006,11 @@
+     int i;
+ 
+     for (i=0; i<argc; i++) {
+-	rb_undef(mod, rb_to_id(argv[i]));
++        VALUE module, id;
++	
++	module = mod;
++	id = get_method_id(argv[i], &module, 1);
++	rb_undef(module, id);
+     }
+     return mod;
+ }
+@@ -2074,7 +2086,9 @@
+ rb_mod_alias_method(mod, newname, oldname)
+     VALUE mod, newname, oldname;
+ {
+-    rb_alias(mod, rb_to_id(newname), rb_to_id(oldname));
++    oldname = get_method_id(oldname, &mod, 1);
++    newname = get_method_id(newname, &mod, 0);
++    rb_alias(mod, newname, oldname);
+     return mod;
+ }
+ 
+@@ -3721,7 +3735,7 @@
+ 		rb_add_method(rb_singleton_class(ruby_class),
+ 			      node->nd_mid, defn, NOEX_PUBLIC);
+ 	    }
+-	    result = Qnil;
++	    result = rb_struct_new(S_MI, ruby_class, ID2SYM(node->nd_mid));
+ 	}
+ 	break;
+ 
+@@ -3754,7 +3768,7 @@
+ 	    defn = copy_node_scope(node->nd_defn, ruby_cref);
+ 	    rb_add_method(klass, node->nd_mid, defn,
+ 			  NOEX_PUBLIC|(body?body->nd_noex&NOEX_UNDEF:0));
+-	    result = Qnil;
++	    result = rb_struct_new(S_MI, klass, ID2SYM(node->nd_mid));
+ 	}
+ 	break;
+ 
+@@ -4001,11 +4015,12 @@
+     VALUE *argv;
+     VALUE obj;
+ {
+-    VALUE mid, priv;
++    VALUE mid, priv, mod;
+     ID id;
+ 
+     rb_scan_args(argc, argv, "11", &mid, &priv);
+-    id = rb_to_id(mid);
++    mod = CLASS_OF(obj);
++    id = get_method_id(mid, &mod, 0);
+     if (rb_method_boundp(CLASS_OF(obj), id, !RTEST(priv))) {
+ 	return Qtrue;
+     }
+@@ -4042,7 +4057,8 @@
+ rb_mod_method_defined(mod, mid)
+     VALUE mod, mid;
+ {
+-    return rb_method_boundp(mod, rb_to_id(mid), 1);
++    mid = get_method_id(mid, &mod, 1);
++    return rb_method_boundp(mod, mid, 1);
+ }
+ 
+ #define VISI_CHECK(x,f) (((x)&NOEX_MASK) == (f))
+@@ -4077,7 +4093,7 @@
+ rb_mod_public_method_defined(mod, mid)
+     VALUE mod, mid;
+ {
+-    ID id = rb_to_id(mid);
++    ID id = get_method_id(mid, &mod, 1);
+     int noex;
+ 
+     if (rb_get_method_body(&mod, &id, &noex)) {
+@@ -4117,7 +4133,7 @@
+ rb_mod_private_method_defined(mod, mid)
+     VALUE mod, mid;
+ {
+-    ID id = rb_to_id(mid);
++    ID id = get_method_id(mid, &mod, 1);
+     int noex;
+ 
+     if (rb_get_method_body(&mod, &id, &noex)) {
+@@ -4157,7 +4173,7 @@
+ rb_mod_protected_method_defined(mod, mid)
+     VALUE mod, mid;
+ {
+-    ID id = rb_to_id(mid);
++    ID id = get_method_id(mid, &mod, 1);
+     int noex;
+ 
+     if (rb_get_method_body(&mod, &id, &noex)) {
+@@ -6878,10 +6894,15 @@
+     ID ex;
+ {
+     int i;
++    VALUE m;
++    ID id;
+ 
+     secure_visibility(self);
+     for (i=0; i<argc; i++) {
+-	rb_export_method(self, rb_to_id(argv[i]), ex);
++        VALUE mod = self;
++	m = argv[i];
++	id = get_method_id(m, &mod, 1);
++	rb_export_method(mod, id, ex);
+     }
+     rb_clear_cache_by_class(self);
+ }
+@@ -7100,22 +7121,28 @@
+ 
+     set_method_visibility(module, argc, argv, NOEX_PRIVATE);
+     for (i=0; i<argc; i++) {
+-	VALUE m = module;
+-
+-	id = rb_to_id(argv[i]);
+-	for (;;) {
+-	    body = search_method(m, id, &m);
+-	    if (body == 0) {
+-		body = search_method(rb_cObject, id, &m);
+-	    }
+-	    if (body == 0 || body->nd_body == 0) {
+-		rb_bug("undefined method `%s'; can't happen", rb_id2name(id));
+-	    }
+-	    if (nd_type(body->nd_body) != NODE_ZSUPER) {
+-		break;		/* normal case: need not to follow 'super' link */
++        VALUE mod = module;
++        if (!(id = check_method_id(argv[i], &mod, 0))) {
++	    VALUE m = module;
++
++	    id = rb_to_id(argv[i]);
++	    for (;;) {
++		body = search_method(m, id, &m);
++		if (body == 0) {
++		    body = search_method(rb_cObject, id, &m);
++		}
++		if (body == 0 || body->nd_body == 0) {
++		    rb_bug("undefined method `%s'; can't happen", rb_id2name(id));
++		}
++		if (nd_type(body->nd_body) != NODE_ZSUPER) {
++		    break;		/* normal case: need not to follow 'super' link */
++		}
++		m = RCLASS(m)->super;
++		if (!m) break;
+ 	    }
+-	    m = RCLASS(m)->super;
+-	    if (!m) break;
++	}
++	else {
++	    body = search_method(module, id, &mod);
+ 	}
+ 	rb_add_method(rb_singleton_class(module), id, body->nd_body, NOEX_PUBLIC);
+     }
+@@ -8502,7 +8529,7 @@
+ 	rklass = RCLASS(rklass)->super;
+     }
+     if (TYPE(klass) == T_ICLASS) klass = RBASIC(klass)->klass;
+-    method = Data_Make_Struct(mklass, struct METHOD, bm_mark, free, data);
++    method = Data_Make_Struct(mklass, struct METHOD, bm_mark, -1, data);
+     data->klass = klass;
+     data->recv = obj;
+     data->id = id;
+@@ -8514,6 +8541,43 @@
+     return method;
+ }
+ 
++static ID
++get_method_id(obj, mod, allow_meta)
++    VALUE obj, *mod;
++    int allow_meta;
++{
++    VALUE id;
++
++    id = check_method_id(obj, mod, allow_meta);
++    if (!id) id = rb_to_id(obj);
++
++    return id;
++}
++
++static ID
++check_method_id(obj, mod, allow_meta)
++    VALUE obj, *mod;
++    int allow_meta;
++{
++    VALUE klass;
++    ID id;
++
++    if (CLASS_OF(obj) != S_MI)
++	return 0;
++    klass = rb_struct_aref(obj, INT2FIX(0));
++    id = rb_to_id(rb_struct_aref(obj, INT2FIX(1)));
++    if (klass != *mod) {
++        if (allow_meta && klass == CLASS_OF(*mod)) {
++	    *mod = CLASS_OF(*mod);
++	}
++	else {
++	    rb_raise(rb_eTypeError, "%s mismatch - %s for %s",
++		     (TYPE(*mod) == T_CLASS ? "class" : "module"),
++		     RSTRING(rb_obj_as_string(klass))->ptr, RSTRING(rb_obj_as_string(*mod))->ptr);
++	}
++    }
++    return id;
++}
+ 
+ /**********************************************************************
+  *
+@@ -8631,7 +8695,9 @@
+     VALUE obj;
+     VALUE vid;
+ {
+-    return mnew(CLASS_OF(obj), obj, rb_to_id(vid), rb_cMethod);
++    VALUE klass = CLASS_OF(obj);
++    vid = get_method_id(vid, &klass, 0);
++    return mnew(klass, obj, vid, rb_cMethod);
+ }
+ 
+ /*
+@@ -8671,7 +8737,8 @@
+     VALUE mod;
+     VALUE vid;
+ {
+-    return mnew(mod, Qundef, rb_to_id(vid), rb_cUnboundMethod);
++    vid = get_method_id(vid, &mod, 0);
++    return mnew(mod, Qundef, vid, rb_cUnboundMethod);
+ }
+ 
+ /*
+@@ -9221,6 +9288,8 @@
+     rb_define_method(rb_cUnboundMethod, "to_s", method_inspect, 0);
+     rb_define_method(rb_cUnboundMethod, "bind", umethod_bind, 1);
+     rb_define_method(rb_cModule, "instance_method", rb_mod_method, 1);
++
++    S_MI = rb_struct_define("MI", "module", "name", NULL);
+ }
+ 
+ /*

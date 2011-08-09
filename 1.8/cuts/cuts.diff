@@ -1,0 +1,1114 @@
+--- class.c	17 Oct 2005 18:43:21 -0000	1.1.1.1
++++ class.c	17 Oct 2005 19:32:20 -0000
+@@ -29,6 +29,7 @@
+     klass->iv_tbl = 0;
+     klass->m_tbl = 0;		/* safe GC */
+     klass->m_tbl = st_init_numtable();
++    INIT_CUTS((VALUE)klass);
+ 
+     OBJ_INFECT(klass, super);
+     return (VALUE)klass;
+@@ -338,11 +339,68 @@
+ }
+ 
+ static VALUE
++copy_cuts(cuts, super, module)
++    VALUE cuts, super;
++{
++    VALUE result = 0;
++    VALUE *insert = &result;
++    VALUE temp;
++    char *cut_name, *buf;
++
++    if (!cuts) {
++	return 0;
++    }
++
++    while (cuts) {
++	NEWOBJ(klass, struct RClass);
++	if (BUILTIN_TYPE(cuts) == T_ICLASS) {
++	    temp = rb_funcall(RBASIC(cuts)->klass, rb_intern("to_s"), 0);
++	}
++	else {
++	    temp = rb_funcall(cuts, rb_intern("to_s"), 0);
++	}
++	if (BUILTIN_TYPE(temp) != T_STRING) {
++	    cut_name = "copy";
++	}
++	else {
++	    buf = ALLOCA_N(char, RSTRING(temp)->len + 6);
++	    sprintf(buf, "copy:%s", RSTRING(temp)->ptr);
++	}
++	
++	OBJSETUP(klass, rb_define_module_id(rb_intern(buf)), T_ICLASS);
++	if (!RCLASS(cuts)->iv_tbl) {
++	    RCLASS(cuts)->iv_tbl = st_init_numtable();
++	}
++	klass->iv_tbl = RCLASS(cuts)->iv_tbl;
++	if (temp = rb_is_sentinel(cuts)) {
++	    FL_SET(RBASIC(klass)->klass, FL_SENTINEL);
++	    st_insert(RCLASS(RBASIC(klass)->klass)->iv_tbl, rb_intern("__for__"), temp);
++	}
++	klass->m_tbl = RCLASS(cuts)->m_tbl;
++	INIT_CUTS((VALUE)klass);
++	*insert = (VALUE)klass;
++	insert = &RCLASS(klass)->super;
++	if (RCLASS(cuts)->m_tbl == RCLASS(module)->m_tbl) {
++	    goto end;
++	}
++	cuts = RCLASS(cuts)->super;
++	while (HAS_CUTS(cuts)) {
++	    cuts = GET_CUTS(cuts);
++	}
++    }
++ end:
++    *insert = super;
++    
++    return result;
++}
++
++static VALUE
+ include_class_new(module, super)
+     VALUE module, super;
+ {
+     NEWOBJ(klass, struct RClass);
+     OBJSETUP(klass, rb_cClass, T_ICLASS);
++    INIT_CUTS((VALUE)klass);
+ 
+     if (BUILTIN_TYPE(module) == T_ICLASS) {
+ 	module = RBASIC(module)->klass;
+@@ -353,6 +411,11 @@
+     klass->iv_tbl = RCLASS(module)->iv_tbl;
+     klass->m_tbl = RCLASS(module)->m_tbl;
+     klass->super = super;
++#ifdef STORE_CUTS_IN_EXTRA_FIELD
++    if (HAS_CUTS(module)) {
++	SET_CUTS((VALUE)klass, copy_cuts(GET_CUTS(module), super, module));
++    }
++#endif /* STORE_CUTS_IN_EXTRA_FIELD */
+     if (TYPE(module) == T_ICLASS) {
+ 	RBASIC(klass)->klass = RBASIC(module)->klass;
+     }
+@@ -407,7 +470,15 @@
+ 		break;
+ 	    }
+ 	}
+-	c = RCLASS(c)->super = include_class_new(module, RCLASS(c)->super);
++	RCLASS(c)->super = include_class_new(module, RCLASS(c)->super);
++	if (HAS_CUTS(c)) {
++	    p = GET_CUTS(c);
++	    while (!rb_is_sentinel(p)) {
++		p = RCLASS(p)->super;
++	    }
++	    RCLASS(p)->super = RCLASS(c)->super;
++	}
++	c = RCLASS(c)->super;
+ 	changed = 1;
+       skip:
+ 	module = RCLASS(module)->super;
+@@ -436,9 +507,13 @@
+ rb_mod_included_modules(mod)
+     VALUE mod;
+ {
+-    VALUE ary = rb_ary_new();
++    VALUE ary;
+     VALUE p;
+ 
++    if (BUILTIN_TYPE(mod) == T_CUT) {
++	return rb_cut_included_modules(mod);
++    }
++    ary = rb_ary_new();
+     for (p = RCLASS(mod)->super; p; p = RCLASS(p)->super) {
+ 	if (BUILTIN_TYPE(p) == T_ICLASS) {
+ 	    rb_ary_push(ary, RBASIC(p)->klass);
+@@ -502,13 +577,18 @@
+ rb_mod_ancestors(mod)
+     VALUE mod;
+ {
+-    VALUE p, ary = rb_ary_new();
++    VALUE p, s, ary = rb_ary_new();
+ 
+     for (p = mod; p; p = RCLASS(p)->super) {
+ 	if (FL_TEST(p, FL_SINGLETON))
+ 	    continue;
+ 	if (BUILTIN_TYPE(p) == T_ICLASS) {
+-	    rb_ary_push(ary, RBASIC(p)->klass);
++	    if (s = rb_is_sentinel(p)) {
++		rb_ary_push(ary, s);
++	    }
++	    else {
++		rb_ary_push(ary, RBASIC(p)->klass);
++	    }
+ 	}
+ 	else {
+ 	    rb_ary_push(ary, p);
+--- common.mk	17 Oct 2005 18:43:21 -0000	1.1.1.1
++++ common.mk	17 Oct 2005 19:36:50 -0000
+@@ -16,6 +16,7 @@
+ 		bignum.$(OBJEXT) \
+ 		class.$(OBJEXT) \
+ 		compar.$(OBJEXT) \
++		cut.$(OBJEXT) \
+ 		dir.$(OBJEXT) \
+ 		dln.$(OBJEXT) \
+ 		enum.$(OBJEXT) \
+@@ -203,6 +204,9 @@
+   {$(VPATH)}rubysig.h {$(VPATH)}node.h {$(VPATH)}st.h
+ compar.$(OBJEXT): {$(VPATH)}compar.c {$(VPATH)}ruby.h config.h \
+   {$(VPATH)}defines.h {$(VPATH)}intern.h {$(VPATH)}missing.h
++cut.$(OBJEXT): {$(VPATH)}cut.c {$(VPATH)}ruby.h config.h \
++  {$(VPATH)}defines.h {$(VPATH)}missing.h {$(VPATH)}intern.h \
++  {$(VPATH)}rubysig.h {$(VPATH)}node.h {$(VPATH)}st.h
+ dir.$(OBJEXT): {$(VPATH)}dir.c {$(VPATH)}ruby.h config.h \
+   {$(VPATH)}defines.h {$(VPATH)}intern.h {$(VPATH)}missing.h \
+   {$(VPATH)}util.h
+--- eval.c	17 Oct 2005 18:43:21 -0000	1.1.1.1
++++ eval.c	17 Oct 2005 19:37:45 -0000
+@@ -431,9 +431,15 @@
+     NODE *body;
+ 
+     if (!klass) return 0;
++    while (HAS_CUTS(klass))
++	klass = GET_CUTS(klass);
+     while (!st_lookup(RCLASS(klass)->m_tbl, id, (st_data_t *)&body)) {
+ 	klass = RCLASS(klass)->super;
+-	if (!klass) return 0;
++	if (!klass) {
++	    return 0;
++	}
++	while (HAS_CUTS(klass))
++	    klass = GET_CUTS(klass);
+     }
+ 
+     if (origin) *origin = klass;
+@@ -1796,6 +1802,37 @@
+     return val;
+ }
+ 
++static VALUE
++cutclass(self, node)
++    VALUE self;
++    NODE *node;
++{
++    VALUE val = Qnil;		/* OK */
++    int state;
++
++    PUSH_TAG(PROT_NONE);
++    if ((state = EXEC_TAG()) == 0) {
++	val = rb_eval(self, node);
++    }
++    POP_TAG();
++    if (state) {
++	switch (nd_type(node)) {
++	  case NODE_COLON2:
++	    rb_raise(rb_eTypeError, "undefined class to cut `%s'",
++		     rb_id2name(node->nd_mid));
++	  case NODE_CONST:
++	    rb_raise(rb_eTypeError, "undefined class to cut `%s'",
++		     rb_id2name(node->nd_vid));
++	  default:
++	    break;
++	}
++	JUMP_TAG(state);
++    }
++    rb_check_cuttable(val);
++
++    return val;
++}
++
+ #define ruby_cbase (ruby_cref->nd_clss)
+ 
+ static VALUE
+@@ -1944,6 +1981,8 @@
+ 		desc = "module"; break;
+ 	      case T_CLASS:
+ 		desc = "class"; break;
++	      case T_CUT:
++		desc = "cut"; break;
+ 	    }
+ 	}
+ 	rb_error_frozen(desc);
+@@ -2259,16 +2298,26 @@
+     switch (nd_type(node)) {
+       case NODE_SUPER:
+       case NODE_ZSUPER:
+-	if (ruby_frame->orig_func == 0) return 0;
+-	else if (ruby_frame->last_class == 0) return 0;
+-	val = ruby_frame->last_class;
+-	if (rb_method_boundp(RCLASS(val)->super, ruby_frame->orig_func, 0)) {
+-	    if (nd_type(node) == NODE_SUPER) {
+-		return arg_defined(self, node->nd_args, buf, "super");
+-	    }
+-	    return "super";
+-	}
+-	break;
++ 	{
++ 	    VALUE super;
++ 
++ 	    if (ruby_frame->orig_func == 0) return 0;
++ 	    else if (ruby_frame->last_class == 0) return 0;
++ 	    val = ruby_frame->last_class;
++ 	    if (HAS_CUTS(val)) {
++ 		super = GET_CUTS(val);
++ 	    }
++ 	    else {
++ 		super = RCLASS(val)->super;
++ 	    }
++ 	    if (rb_method_boundp(super, ruby_frame->orig_func, 0)) {
++ 		if (nd_type(node) == NODE_SUPER) {
++ 		    return arg_defined(self, node->nd_args, buf, "super");
++ 		}
++ 		return "super";
++  	    }
++ 	    break;
++  	}
+ 
+       case NODE_VCALL:
+       case NODE_FCALL:
+@@ -2391,6 +2440,7 @@
+ 	else {
+ 	    switch (TYPE(val)) {
+ 	      case T_CLASS:
++	      case T_CUT:
+ 	      case T_MODULE:
+ 		if (rb_const_defined_from(val, node->nd_mid))
+ 		    return "constant";
+@@ -2781,9 +2831,10 @@
+ 	switch (TYPE(c)) {
+ 	  case T_CLASS:
+ 	  case T_MODULE:
++	  case T_CUT:
+ 	    break;
+ 	  default:
+-	    rb_raise(rb_eTypeError, "%s is not a class/module",
++	    rb_raise(rb_eTypeError, "%s is not a class/module/cut",
+ 		     RSTRING(rb_obj_as_string(c))->ptr);
+ 	}
+ 	return c;
+@@ -3636,6 +3687,7 @@
+ 	    if (rb_is_const_id(node->nd_mid)) {
+ 		switch (TYPE(klass)) {
+ 		  case T_CLASS:
++		  case T_CUT:
+ 		  case T_MODULE:
+ 		    result = rb_const_get_from(klass, node->nd_mid);
+ 		    break;
+@@ -3950,6 +4002,62 @@
+ 	}
+ 	break;
+ 
++      case NODE_CUT:
++	{
++	    VALUE super, cut, tmp, cbase;
++	    ID cname;
++	    int gen = Qfalse;
++
++	    if (NIL_P(ruby_cbase)) {
++		rb_raise(rb_eTypeError, "no outer class/module");
++	    }
++	    if (node->nd_super) {
++		super = cutclass(self, node->nd_super);
++	    }
++	    else {
++		super = 0;
++	    }
++
++	    cbase = class_prefix(self, node->nd_cpath);
++	    cname = node->nd_cpath->nd_mid;
++	    if (rb_const_defined_at(cbase, cname)) {
++		cut = rb_const_get_at(cbase, cname);
++		if (TYPE(cut) != T_CUT) {
++		    rb_raise(rb_eTypeError, "%s is not a cut",
++			     rb_id2name(cname));
++		}
++		if (super) {
++		    tmp = rb_class_real(rb_cut_class(cut));
++		    if (tmp != super) {
++			rb_raise(rb_eTypeError, "superclass mismatch for class %s",
++				 rb_id2name(cname));
++		    }
++		    super = 0;
++		}
++		    if (ruby_safe_level >= 4) {
++			rb_raise(rb_eSecurityError, "extending cut prohibited");
++		    }
++	    }
++	    else {
++		if (!super) {
++		    rb_raise(rb_eTypeError, "no class to cut specified");
++		}
++		cut = rb_define_cut_id(cname, super);
++		rb_set_class_path(cut, cbase, rb_id2name(cname));
++		rb_const_set(cbase, cname, cut);
++		gen = Qtrue;
++	    }
++	    if (ruby_wrapper) {
++		rb_extend_object(cut, ruby_wrapper);
++		rb_include_module(cut, ruby_wrapper);
++	    }
++	    if (gen) {
++		rb_funcall(super, rb_intern("was_cut"), 1, cut);
++	    }
++	    result = module_setup(cut, node);
++	}
++	break;
++
+       case NODE_MODULE:
+ 	{
+ 	    VALUE module, cbase;
+@@ -4006,6 +4114,35 @@
+ 	}
+ 	break;
+ 
++      case NODE_SCUT:
++	{
++	    VALUE klass, cut;
++
++	    result = rb_eval(self, node->nd_recv);
++	    if (FIXNUM_P(result) || SYMBOL_P(result)) {
++		rb_raise(rb_eTypeError, "no virtual class for %s",
++			 rb_obj_classname(result));
++	    }
++	    if (ruby_safe_level >= 4 && !OBJ_TAINTED(result))
++		rb_raise(rb_eSecurityError, "Insecure: can't extend object");
++	    klass = rb_singleton_class(result);
++
++	    if (ruby_wrapper) {
++		rb_extend_object(klass, ruby_wrapper);
++		rb_include_module(klass, ruby_wrapper);
++	    }
++
++	    cut = rb_define_cut_id(0, klass);
++
++	    if (ruby_wrapper) {
++		rb_extend_object(cut, ruby_wrapper);
++		rb_include_module(cut, ruby_wrapper);
++	    }
++	    
++	    result = module_setup(cut, node);
++	}
++	break;
++
+       case NODE_DEFINED:
+ 	{
+ 	    char buf[20];
+@@ -6051,7 +6188,7 @@
+     int argc;
+     const VALUE *argv;
+ {
+-    VALUE result, self, klass;
++    VALUE result, self, klass, super;
+ 
+     if (ruby_frame->last_class == 0) {
+ 	rb_name_error(ruby_frame->last_func, "calling `super' from `%s' is prohibited",
+@@ -6061,8 +6198,14 @@
+     self = ruby_frame->self;
+     klass = ruby_frame->last_class;
+ 
++    if (HAS_CUTS(klass)) {
++	super = GET_CUTS(klass);
++    }
++    else {
++	super = RCLASS(klass)->super;
++    }
+     PUSH_ITER(ruby_iter->iter ? ITER_PRE : ITER_NOT);
+-    result = rb_call(RCLASS(klass)->super, self, ruby_frame->orig_func, argc, argv, 3);
++    result = rb_call(super, self, ruby_frame->orig_func, argc, argv, 3);
+     POP_ITER();
+ 
+     return result;
+@@ -7328,6 +7471,7 @@
+ {
+     switch (TYPE(include)) {
+       case T_CLASS:
++      case T_CUT:
+       case T_MODULE:
+ 	break;
+       default:
+--- gc.c	17 Oct 2005 18:43:21 -0000	1.1.1.1
++++ gc.c	17 Oct 2005 19:32:20 -0000
+@@ -777,6 +777,7 @@
+ 	  case NODE_RESCUE:
+ 	  case NODE_RESBODY:
+ 	  case NODE_CLASS:
++	  case NODE_CUT:
+ 	    gc_mark((VALUE)obj->as.node.u2.node, lev);
+ 	    /* fall through */
+ 	  case NODE_BLOCK:	/* 1,3 */
+@@ -805,6 +806,7 @@
+ 	  case NODE_OR:
+ 	  case NODE_CASE:
+ 	  case NODE_SCLASS:
++	  case NODE_SCUT:
+ 	  case NODE_DOT2:
+ 	  case NODE_DOT3:
+ 	  case NODE_FLIP2:
+@@ -904,8 +906,14 @@
+ 
+     gc_mark(obj->as.basic.klass, lev);
+     switch (obj->as.basic.flags & T_MASK) {
+-      case T_ICLASS:
+       case T_CLASS:
++#ifdef STORE_CUTS_IN_EXTRA_FIELD
++	  if (obj->as.klass.cuts)
++	      gc_mark(obj->as.klass.cuts, lev);
++	  /* fall through */
++#endif /* STORE_CUTS_IN_EXTRA_FIELD */
++      case T_CUT:
++      case T_ICLASS:
+       case T_MODULE:
+ 	mark_tbl(obj->as.klass.m_tbl, lev);
+ 	mark_tbl(obj->as.klass.iv_tbl, lev);
+@@ -1156,6 +1164,7 @@
+ 	    st_free_table(RANY(obj)->as.object.iv_tbl);
+ 	}
+ 	break;
++      case T_CUT:
+       case T_MODULE:
+       case T_CLASS:
+ 	rb_clear_cache_by_class((VALUE)obj);
+--- inits.c	17 Oct 2005 18:43:21 -0000	1.1.1.1
++++ inits.c	17 Oct 2005 19:32:20 -0000
+@@ -16,6 +16,7 @@
+ void Init_Bignum _((void));
+ void Init_Binding _((void));
+ void Init_Comparable _((void));
++void Init_Cut _((void));
+ void Init_Dir _((void));
+ void Init_Enumerable _((void));
+ void Init_Exception _((void));
+@@ -52,6 +53,7 @@
+     Init_sym();
+     Init_var_tables();
+     Init_Object();
++    Init_Cut();
+     Init_Comparable();
+     Init_Enumerable();
+     Init_Precision();
+--- intern.h	17 Oct 2005 18:43:21 -0000	1.1.1.1
++++ intern.h	17 Oct 2005 19:32:20 -0000
+@@ -122,6 +122,13 @@
+ void rb_define_private_method _((VALUE, const char*, VALUE (*)(ANYARGS), int));
+ void rb_define_singleton_method _((VALUE, const char*, VALUE(*)(ANYARGS), int));
+ VALUE rb_singleton_class _((VALUE));
++/* cut.c */
++VALUE rb_define_cut_id _((ID, VALUE));
++VALUE rb_cut_class _((VALUE));
++void rb_check_cuttable _((VALUE));
++VALUE rb_get_cuts _((VALUE));
++void rb_set_cuts _((VALUE, VALUE));
++VALUE rb_is_sentinel _((VALUE));
+ /* compar.c */
+ int rb_cmpint _((VALUE, VALUE, VALUE));
+ NORETURN(void rb_cmperr _((VALUE, VALUE)));
+--- keywords	17 Oct 2005 18:43:21 -0000	1.1.1.1
++++ keywords	17 Oct 2005 19:32:20 -0000
+@@ -10,6 +10,7 @@
+ break, {kBREAK, kBREAK}, EXPR_MID
+ case, {kCASE, kCASE}, EXPR_BEG
+ class, {kCLASS, kCLASS}, EXPR_CLASS
++__cut__, {kCUT, kCUT}, EXPR_CLASS
+ def, {kDEF, kDEF}, EXPR_FNAME
+ defined?, {kDEFINED, kDEFINED}, EXPR_ARG
+ do, {kDO, kDO}, EXPR_BEG
+--- node.h	17 Oct 2005 18:43:21 -0000	1.1.1.1
++++ node.h	17 Oct 2005 19:32:20 -0000
+@@ -98,8 +98,10 @@
+     NODE_VALIAS,
+     NODE_UNDEF,
+     NODE_CLASS,
++    NODE_CUT,
+     NODE_MODULE,
+     NODE_SCLASS,
++    NODE_SCUT,
+     NODE_COLON2,
+     NODE_COLON3,
+     NODE_CREF,
+@@ -318,6 +320,8 @@
+ #define NEW_UNDEF(i) NEW_NODE(NODE_UNDEF,0,i,0)
+ #define NEW_CLASS(n,b,s) NEW_NODE(NODE_CLASS,n,NEW_SCOPE(b),(s))
+ #define NEW_SCLASS(r,b) NEW_NODE(NODE_SCLASS,r,NEW_SCOPE(b),0)
++#define NEW_CUT(n,b,s) NEW_NODE(NODE_CUT,n,NEW_SCOPE(b),(s))
++#define NEW_SCUT(r,b) NEW_NODE(NODE_SCUT,r,NEW_SCOPE(b),0)
+ #define NEW_MODULE(n,b) NEW_NODE(NODE_MODULE,n,NEW_SCOPE(b),0)
+ #define NEW_COLON2(c,i) NEW_NODE(NODE_COLON2,c,i,0)
+ #define NEW_COLON3(i) NEW_NODE(NODE_COLON3,0,i,0)
+--- object.c	17 Oct 2005 18:43:21 -0000	1.1.1.1
++++ object.c	17 Oct 2005 19:32:20 -0000
+@@ -25,6 +25,7 @@
+ VALUE rb_cModule;
+ VALUE rb_cClass;
+ VALUE rb_cData;
++VALUE rb_cCut;
+ 
+ VALUE rb_cNilClass;
+ VALUE rb_cTrueClass;
+@@ -1265,7 +1266,7 @@
+ 
+ 	rb_str_cat2(s, "Class:");
+ 	switch (TYPE(v)) {
+-	  case T_CLASS: case T_MODULE:
++	  case T_CLASS: case T_MODULE: case T_CUT:
+ 	    rb_str_append(s, rb_inspect(v));
+ 	    break;
+ 	  default:
+@@ -2588,10 +2589,12 @@
+     rb_cObject = boot_defclass("Object", 0);
+     rb_cModule = boot_defclass("Module", rb_cObject);
+     rb_cClass =  boot_defclass("Class",  rb_cModule);
++    rb_cCut =    boot_defclass("Cut", rb_cClass);
+ 
+     metaclass = rb_make_metaclass(rb_cObject, rb_cClass);
+     metaclass = rb_make_metaclass(rb_cModule, metaclass);
+     metaclass = rb_make_metaclass(rb_cClass, metaclass);
++    metaclass = rb_make_metaclass(rb_cCut, metaclass);
+ 
+     rb_mKernel = rb_define_module("Kernel");
+     rb_include_module(rb_cObject, rb_mKernel);
+@@ -2603,6 +2606,7 @@
+     rb_define_private_method(rb_cModule, "method_added", rb_obj_dummy, 1);
+     rb_define_private_method(rb_cModule, "method_removed", rb_obj_dummy, 1);
+     rb_define_private_method(rb_cModule, "method_undefined", rb_obj_dummy, 1);
++    rb_define_private_method(rb_cModule, "was_cut", rb_obj_dummy, 1);
+ 
+ 
+     rb_define_method(rb_mKernel, "nil?", rb_false, 0);
+--- parse.y	17 Oct 2005 18:43:21 -0000	1.1.1.1
++++ parse.y	17 Oct 2005 19:32:20 -0000
+@@ -197,6 +197,7 @@
+ 
+ %token  kCLASS
+ 	kMODULE
++	kCUT
+ 	kDEF
+ 	kUNDEF
+ 	kBEGIN
+@@ -942,7 +943,7 @@
+ 		;
+ 
+ reswords	: k__LINE__ | k__FILE__  | klBEGIN | klEND
+-		| kALIAS | kAND | kBEGIN | kBREAK | kCASE | kCLASS | kDEF
++		| kALIAS | kAND | kBEGIN | kBREAK | kCASE | kCLASS | kCUT | kDEF
+ 		| kDEFINED | kDO | kELSE | kELSIF | kEND | kENSURE | kFALSE
+ 		| kFOR | kIN | kMODULE | kNEXT | kNIL | kNOT
+ 		| kOR | kREDO | kRESCUE | kRETRY | kRETURN | kSELF | kSUPER
+@@ -1638,6 +1639,44 @@
+ 		        in_def = $<num>4;
+ 		        in_single = $<num>6;
+ 		    }
++		| kCUT cpath superclass
++		    {
++			if (in_def || in_single)
++			    yyerror("cut definition in method body");
++			class_nest++;
++			local_push(0);
++		        $<num>$ = ruby_sourceline;
++		    }
++		  bodystmt
++		  kEND
++		    {
++		        $$ = NEW_CUT($2, $5, $3);
++		        nd_set_line($$, $<num>4);
++		        local_pop();
++			class_nest--;
++		    }
++		| kCUT tLSHFT expr
++		    {
++			$<num>$ = in_def;
++		        in_def = 0;
++		    }
++		  term
++		    {
++		        $<num>$ = in_single;
++		        in_single = 0;
++			class_nest++;
++			local_push(0);
++		    }
++		  bodystmt
++		  kEND
++		    {
++		        $$ = NEW_SCUT($3, $7);
++		        fixpos($$, $3);
++		        local_pop();
++			class_nest--;
++		        in_def = $<num>4;
++		        in_single = $<num>6;
++		    }
+ 		| kMODULE cpath
+ 		    {
+ 			if (in_def || in_single)
+--- ruby.h	17 Oct 2005 18:43:21 -0000	1.1.1.1
++++ ruby.h	17 Oct 2005 19:32:20 -0000
+@@ -197,6 +197,8 @@
+ #define T_BIGNUM 0x0d
+ #define T_FILE   0x0e
+ 
++#define T_CUT    0x0f
++
+ #define T_TRUE   0x20
+ #define T_FALSE  0x21
+ #define T_DATA   0x22
+@@ -318,6 +320,9 @@
+     struct st_table *iv_tbl;
+     struct st_table *m_tbl;
+     VALUE super;
++#ifdef STORE_CUTS_IN_EXTRA_FIELD
++    VALUE cuts;
++#endif /* STORE_CUTS_IN_EXTRA_FIELD */
+ };
+ 
+ struct RFloat {
+@@ -375,6 +380,18 @@
+ 
+ #define DATA_PTR(dta) (RDATA(dta)->data)
+ 
++#ifdef STORE_CUTS_IN_EXTRA_FIELD
++#  define HAS_CUTS(klass) GET_CUTS(klass)
++#  define GET_CUTS(klass) (RCLASS(klass)->cuts)
++#  define SET_CUTS(klass, val) (RCLASS(klass)->cuts = val)
++#  define INIT_CUTS(klass) SET_CUTS(klass, 0)
++#else /* STORE_CUTS_IN_EXTRA_FIELD */
++#  define HAS_CUTS(klass) (FL_TEST(klass, FL_HAS_CUTS) != 0)
++#  define GET_CUTS(klass) rb_get_cuts(klass)
++#  define SET_CUTS(klass, val) (rb_set_cuts(klass, val))
++#  define INIT_CUTS(klass)
++#endif /* STORE_CUTS_IN_EXTRA_FIELD */
++
+ /*
+ #define RUBY_DATA_FUNC(func) ((void (*)_((void*)))func)
+ */
+@@ -430,6 +447,8 @@
+ #define FL_TAINT     (1<<8)
+ #define FL_EXIVAR    (1<<9)
+ #define FL_FREEZE    (1<<10)
++#define FL_HAS_CUTS  FL_USER7
++#define FL_SENTINEL  FL_USER6
+ 
+ #define FL_USHIFT    11
+ 
+@@ -577,6 +596,7 @@
+ RUBY_EXTERN VALUE rb_cArray;
+ RUBY_EXTERN VALUE rb_cBignum;
+ RUBY_EXTERN VALUE rb_cClass;
++RUBY_EXTERN VALUE rb_cCut;
+ RUBY_EXTERN VALUE rb_cDir;
+ RUBY_EXTERN VALUE rb_cData;
+ RUBY_EXTERN VALUE rb_cFalseClass;
+--- variable.c	17 Oct 2005 18:43:21 -0000	1.1.1.1
++++ variable.c	17 Oct 2005 19:32:20 -0000
+@@ -205,6 +205,13 @@
+ 	    else {
+ 		s = rb_class2name(RBASIC(klass)->klass);
+ 	    }
++	} else if (TYPE(klass) == T_CUT) {
++	    if (rb_obj_class(klass) == rb_cCut) {
++		s = "Cut";
++	    }
++	    else {
++		s = rb_class2name(RBASIC(klass)->klass);
++	    }
+ 	}
+ 	len = 2 + strlen(s) + 3 + 2 * SIZEOF_LONG + 1;
+ 	path = rb_str_new(0, len);
+@@ -1006,6 +1013,7 @@
+     switch (TYPE(obj)) {
+       case T_OBJECT:
+       case T_CLASS:
++      case T_CUT:
+       case T_MODULE:
+ 	if (ROBJECT(obj)->iv_tbl && st_lookup(ROBJECT(obj)->iv_tbl, id, &val))
+ 	    return val;
+@@ -1049,6 +1057,7 @@
+     switch (TYPE(obj)) {
+       case T_OBJECT:
+       case T_CLASS:
++      case T_CUT:
+       case T_MODULE:
+ 	if (!ROBJECT(obj)->iv_tbl) ROBJECT(obj)->iv_tbl = st_init_numtable();
+ 	st_insert(ROBJECT(obj)->iv_tbl, id, val);
+@@ -1068,6 +1077,7 @@
+     switch (TYPE(obj)) {
+       case T_OBJECT:
+       case T_CLASS:
++      case T_CUT:
+       case T_MODULE:
+ 	if (ROBJECT(obj)->iv_tbl && st_lookup(ROBJECT(obj)->iv_tbl, id, 0))
+ 	    return Qtrue;
+@@ -1119,6 +1129,7 @@
+     switch (TYPE(obj)) {
+       case T_OBJECT:
+       case T_CLASS:
++      case T_CUT:
+       case T_MODULE:
+ 	if (ROBJECT(obj)->iv_tbl) {
+ 	    st_foreach_safe(ROBJECT(obj)->iv_tbl, ivar_i, ary);
+@@ -1177,6 +1188,7 @@
+     switch (TYPE(obj)) {
+       case T_OBJECT:
+       case T_CLASS:
++      case T_CUT:
+       case T_MODULE:
+ 	if (ROBJECT(obj)->iv_tbl && st_delete(ROBJECT(obj)->iv_tbl, (st_data_t*)&id, &val)) {
+ 	    return val;
+--- cut.c.orig	2005-10-19 17:13:48.641137056 +0200
++++ cut.c	2005-10-17 21:32:20.000000000 +0200
+@@ -0,0 +1,359 @@
++/**********************************************************************
++
++  cut.c -
++
++  $Author: peterv $
++  $Date: 2004/11/24 18:49:32 $
++  created at: Sat Oct 24 00:30:24 CEST 2004
++
++  Copyright (C) 2004 Peter Vanbroekhoven
++
++**********************************************************************/
++
++#include "ruby.h"
++#include "rubysig.h"
++#include "node.h"
++#include "st.h"
++#include <ctype.h>
++
++static ID id__cutclass__;
++
++VALUE
++rb_cut_boot(super)
++    VALUE super;
++{
++    NEWOBJ(cut, struct RClass);
++    OBJSETUP(cut, rb_cCut, T_CUT);
++
++    cut->super = super;
++    cut->iv_tbl = 0;
++    cut->m_tbl = 0;		/* safe GC */
++    cut->m_tbl = st_init_numtable();
++
++    OBJ_INFECT(cut, super);
++    return (VALUE)cut;
++}
++
++static VALUE
++rb_cut_dummy()
++{
++    return Qnil;
++}
++
++static VALUE
++rb_cut_s_alloc(klass)
++    VALUE klass;
++{
++    return rb_cut_boot(0);
++}
++
++static VALUE
++rb_new_sentinel(cut_class)
++    VALUE cut_class;
++{
++    VALUE sentinel;
++    NEWOBJ(klass, struct RClass);
++    OBJSETUP(klass, rb_cClass, T_ICLASS);
++    klass->super = RCLASS(cut_class)->super;
++    klass->iv_tbl = 0;
++    klass->m_tbl = 0;
++    if (!RCLASS(cut_class)->iv_tbl) {
++	RCLASS(cut_class)->iv_tbl = st_init_numtable();
++    }
++    klass->iv_tbl = RCLASS(cut_class)->iv_tbl;
++    klass->m_tbl = RCLASS(cut_class)->m_tbl;
++    sentinel = rb_define_module_id(rb_intern("sentinel"));
++    FL_SET(sentinel, FL_SENTINEL);
++    if (!RCLASS(sentinel)->iv_tbl)
++	RCLASS(sentinel)->iv_tbl = st_init_numtable();
++    st_insert(RCLASS(sentinel)->iv_tbl, rb_intern("__for__"), cut_class);
++    RBASIC(klass)->klass = sentinel;
++    OBJ_INFECT(klass, cut_class);
++    OBJ_INFECT(klass, RCLASS(cut_class)->super);
++
++    return (VALUE)klass;
++}
++
++VALUE
++rb_is_sentinel(klass)
++    VALUE klass;
++{
++    VALUE result;
++    if (FL_TEST(RBASIC(klass)->klass, FL_SENTINEL)) {
++	if (!st_lookup(RCLASS(RBASIC(klass)->klass)->iv_tbl, rb_intern("__for__"), (st_data_t *)&result)) {
++	    rb_bug("inconsistent sentinel");
++	}
++	else {
++	    return result;
++	}
++    }
++    else {
++	return 0;
++    }
++}
++
++static VALUE
++rb_setup_cut(cut, super)
++    VALUE cut, super;
++{
++    VALUE list;
++
++    if (BUILTIN_TYPE(super) != T_CLASS &&
++	BUILTIN_TYPE(super) != T_CUT &&
++	BUILTIN_TYPE(super) != T_MODULE)
++	Check_Type(super, T_CLASS);
++    if (!RCLASS(cut)->iv_tbl) {
++	RCLASS(cut)->iv_tbl = st_init_numtable();
++    }
++    st_insert(RCLASS(cut)->iv_tbl, id__cutclass__, super);
++    if (!HAS_CUTS(super)) {
++	list = rb_new_sentinel(super);
++    }
++    else {
++	list = GET_CUTS(super);
++    }
++    RCLASS(cut)->super = list;
++    SET_CUTS(super, cut);
++    OBJ_INFECT(cut, list);
++    rb_clear_cache();
++
++    return cut;
++}
++
++static VALUE
++rb_cut_initialize(cut, super)
++    VALUE cut, super;
++{
++    if (RCLASS(cut)->super) {
++	rb_raise(rb_eTypeError, "already initialized cut");
++    }
++    rb_setup_cut(cut, super);
++    if (rb_block_given_p()) {
++	rb_mod_module_eval(0, 0, cut);
++    }
++    rb_funcall(super, rb_intern("was_cut"), 1, cut);
++
++    return cut;
++} 
++
++VALUE
++rb_cut_class(cut)
++    VALUE cut;
++{
++    VALUE result;
++
++    if (!RCLASS(cut)->super) {
++	rb_raise(rb_eTypeError, "uninitialized cut");
++    }
++
++    if (!RCLASS(cut)->iv_tbl ||
++	!st_lookup(RCLASS(cut)->iv_tbl, id__cutclass__, (st_data_t *)&result)) {
++	rb_bug("cut wrongly intialized");
++    }
++    return result;
++}
++
++VALUE
++rb_define_cut_id(id, super)
++    ID id;
++    VALUE super;
++{
++    VALUE cut;
++
++    cut = rb_cut_s_alloc();
++    rb_setup_cut(cut, super);
++
++    return cut;
++}
++
++static VALUE
++rb_class_cuts(klass)
++    VALUE klass;
++{
++    VALUE result = rb_ary_new();
++    VALUE list = GET_CUTS(klass);
++    
++    if (!list) {
++	return result;
++    }
++    while (!rb_is_sentinel(list)) {
++	if (BUILTIN_TYPE(list) == T_CUT)
++	    rb_ary_push(result, list);
++	list = RCLASS(list)->super;
++    }
++
++    return result;
++}
++
++static void
++rb_print_class_info(klass, indent)
++    VALUE klass;
++    int indent;
++{
++    char *format, *buf;
++    VALUE name;
++    int len;
++    char *cutornot;
++
++    if (FL_TEST(klass, FL_HAS_CUTS)) {
++	cutornot = "cut ";
++    }
++    else {
++	cutornot = "";
++    }
++    if (BUILTIN_TYPE(klass) == T_ICLASS) {
++	format = "%p - %smodule:%s -> super=%p, cuts=%p, m_tbl=%p, iv_tbl=%p, __for__=%p";
++	name = rb_convert_type(RBASIC(klass)->klass, T_STRING, "String", "to_s");
++    }
++    else {
++	if (BUILTIN_TYPE(klass) == T_CLASS) {
++	    format = "%p - %sclass:%s -> super=%p, cuts=%p, m_tbl=%p, iv_tbl=%p, __for__=%p";
++	}
++	else {
++	    format = "%p - %scut:%s -> super=%p, cuts=%p, m_tbl=%p, iv_tbl=%p, __for__=%p";
++	}
++	name = rb_class_name(klass);
++    }
++    while (indent--) {
++	rb_io_write(rb_stdout, rb_str_new2("  "));
++    }
++    len = 5 * 16 + 4 + RSTRING(name)->len + strlen(format) - 12 + 1;
++    buf = ALLOCA_N(char, len);
++    sprintf(buf, format, klass, cutornot, RSTRING(name)->ptr, RCLASS(klass)->super, GET_CUTS(klass),
++	    RCLASS(klass)->m_tbl, RCLASS(klass)->iv_tbl, rb_is_sentinel(klass));
++    rb_io_write(rb_stdout, rb_str_new2(buf));
++    rb_io_write(rb_stdout, rb_default_rs);
++}
++
++static void
++rb_class_dump_cuts(klass, depth)
++    VALUE klass;
++    int depth;
++{
++    VALUE p;
++    
++    p = GET_CUTS(klass);
++    while (!rb_is_sentinel(p)) {
++	rb_print_class_info(p, depth);
++	if (HAS_CUTS(p)) {
++	    rb_class_dump_cuts(p, depth + 1);
++	}
++	p = RCLASS(p)->super;
++    }
++    rb_print_class_info(p, depth);
++}
++
++static VALUE
++rb_class_dump(klass)
++    VALUE klass;
++{
++    VALUE p;
++    while (klass) {
++	rb_print_class_info(klass, 0);
++	if (HAS_CUTS(klass)) {
++	    rb_class_dump_cuts(klass, 1);
++	}
++	klass = RCLASS(klass)->super;
++    }
++
++    return Qnil;
++}
++
++void
++rb_check_cuttable(super)
++    VALUE super;
++{
++    if (TYPE(super) != T_CLASS &&
++	TYPE(super) != T_CUT &&
++	TYPE(super) != T_MODULE) {
++	rb_raise(rb_eTypeError, "class to be cut must be a Class or Cut (%s given)",
++		 rb_obj_classname(super));
++    }
++    if (RBASIC(super)->flags & FL_SINGLETON) {
++	rb_raise(rb_eTypeError, "can't cut virtual class");
++    }
++}
++
++VALUE
++rb_cut_included_modules(cut)
++    VALUE cut;
++{
++    VALUE result = rb_ary_new();
++    VALUE cut_class = rb_cut_class(cut);
++
++    cut = RCLASS(cut)->super;
++    if (!cut) {
++	return result;
++    }
++    while (BUILTIN_TYPE(cut) == T_ICLASS &&
++	   !rb_is_sentinel(cut)) {
++	rb_ary_push(result, RBASIC(cut)->klass);
++	cut = RCLASS(cut)->super;
++    }
++    return result;
++    
++    
++}
++
++#ifndef STORE_CUTS_IN_EXTRA_FIELD
++
++static ID id__cuts__;
++
++VALUE rb_get_cuts(klass)
++    VALUE klass;
++{
++    VALUE result, cut_class;
++
++    if (!FL_TEST(klass, FL_HAS_CUTS)) {
++	return 0;
++    }
++    if (!RCLASS(klass)->iv_tbl ||
++	!st_lookup(RCLASS(klass)->iv_tbl, id__cuts__, (st_data_t *)&result)) {
++	result = 0;
++    }
++    else if (!result || !RCLASS(result)->iv_tbl ||
++	!st_lookup(RCLASS(result)->iv_tbl, id__cutclass__, (st_data_t *)&cut_class)) {
++	result = 0;
++    }
++    else if (cut_class != klass) {
++	result = 0;
++    }
++    return result;
++}
++
++void rb_set_cuts(klass, val)
++    VALUE klass, val;
++{
++    if (!RCLASS(klass)->iv_tbl)
++	RCLASS(klass)->iv_tbl = st_init_numtable();
++    st_insert(RCLASS(klass)->iv_tbl, id__cuts__, (st_data_t)val);
++    if (val) {
++	FL_SET(klass, FL_HAS_CUTS);
++    }
++    else {
++	FL_UNSET(klass, FL_HAS_CUTS);
++    }
++}
++
++#endif /* STORE_CUTS_IN_EXTRA_FIELD */
++
++void
++Init_Cut()
++{
++#ifndef STORE_CUTS_IN_EXTRA_FIELD
++    id__cuts__ = rb_intern("__cuts__");
++#endif /* STORE_CUTS_IN_EXTRA_FIELD */
++
++    id__cutclass__ = rb_intern("__cutclass__");
++
++    rb_define_method(rb_cModule, "cuts", rb_class_cuts, 0);
++
++    rb_define_method(rb_cModule, "dump_structure", rb_class_dump, 0);
++    
++    rb_define_alloc_func(rb_cCut, rb_cut_s_alloc);
++    rb_undef_method(rb_cCut, "new");
++    rb_undef_method(rb_cCut, "superclass");
++    rb_undef_method(rb_cCut, "cuts");
++    rb_define_method(rb_cCut, "cut_class", rb_cut_class, 0);
++    rb_define_private_method(rb_cCut, "initialize", rb_cut_initialize, 1);
++}

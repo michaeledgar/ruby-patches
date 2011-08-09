@@ -75,6 +75,9 @@ Special thanks to everyone on this list for making all these patches possible!
 * skaes
 * funny-falcon
 * enebo
+* Nobuyoshi Nakada
+* 7trans
+* Peter Vanbroekhoven
 
 Licensing
 ---------
