@@ -1,6 +1,6 @@
 # REE's GC Tuning
 
-**Author:** REE developers + Github users skaes and funny-falcon
+**Author:** Github users skaes (Stefan Kaes) and funny-falcon
 
 ## What it does
 
