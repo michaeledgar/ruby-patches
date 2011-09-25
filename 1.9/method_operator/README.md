@@ -5,6 +5,7 @@
 ## What it does
 
 Patches the ruby source (v1.9) such that it allows to grab methods from an object using a compact syntax:
+
 ```
   \class # => #<Method: Object(Kernel)#class>
   1\+ # => #<Method: Fixnum#+>
